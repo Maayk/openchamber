@@ -11,6 +11,17 @@
 
 OpenChamber gives you one place to direct agent work, understand the changes, and move them toward release. Your projects stay available when you switch devices or step away.
 
+## What's different in this fork
+
+This fork started from a daily annoyance: **the model and the thinking variant you picked wouldn't stick.** Reselecting them every session got old, so the focus here is persistence.
+
+- **The thinking variant follows the model, not the agent.** Switching between build and plan agents no longer resets your thinking mode to the default, and your choice now survives restarts — it used to live in memory only.
+- **Your model survives agent switches.** Changing agents keeps the model you already picked for the session instead of snapping back to the other agent's pinned model. Agent defaults only apply when a session has no selection yet.
+- **New conversations continue where you left off.** A fresh session inherits the last model and thinking variant you used, instead of falling back to the project or settings default.
+- **Manual overrides hold.** A hand-picked model + variant is no longer clobbered by the historical/default variant on reload.
+
+And a small extra: when "max" thinking is active, the composer box gets a soft breathing glow in your theme's primary color. Purely cosmetic — a fun side quest — and it honors reduced-motion preferences.
+
 ![OpenChamber Chat](docs/references/chat_example.png)
 
 <details>
