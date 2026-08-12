@@ -3,6 +3,7 @@
 @import "./styles/design-system.css";
 @import "./styles/typography.css";
 @import "./styles/mobile.css";
+@import "./styles/variant-max.css";
 /* Load KaTeX styles eagerly with the main bundle. Importing them inside the
    lazy MarkdownRendererImpl chunk meant a stylesheet was injected late on the
    first markdown render of a session; that late injection triggered a style

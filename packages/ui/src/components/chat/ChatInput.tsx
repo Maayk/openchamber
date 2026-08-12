@@ -2607,7 +2607,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({ onOpenSettings, scrollTo
                 />
                 <div
                     className={cn(
-                        "flex flex-col relative overflow-visible",
+                        "oc-composer-box flex flex-col relative overflow-visible",
                         isComposerExpanded && 'flex-1 min-h-0',
                         "border border-border/80",
                         "shadow-[0_4px_16px_-4px_rgb(0_0_0_/_0.12)]",

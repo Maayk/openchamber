@@ -2891,9 +2891,16 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         className,
     );
 
+    // The composer box gets a soft glow while the Max thinking variant is
+    // active (see styles/variant-max.css — driven via the :has() selector).
+    const isMaxVariantActive = currentVariant?.toLowerCase() === 'max';
+
     return (
         <>
-            <div className={inlineClassName}>
+            <div
+                className={inlineClassName}
+                data-max-variant={isMaxVariantActive ? 'true' : undefined}
+            >
                 <div
                     className={cn(
                         'flex items-center min-w-0 flex-1 justify-end',

@@ -1,0 +1,49 @@
+/* ------------------------------------------------------------------
+   "Max" thinking variant — composer glow.
+
+   When the user selects the "max" thinking variant, the whole composer
+   box gets a soft, breathing glow in the theme's primary color. The
+   effect lives on the input box (room to breathe), not on the tiny
+   variant chip, and adapts to the active theme.
+
+   Driven by the `data-max-variant` marker on the model controls root
+   (see ModelControls.tsx) via the :has() selector.
+------------------------------------------------------------------ */
+
+@property --variant-max-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+.oc-composer-box:has([data-max-variant="true"]) {
+  animation: variant-max-box-glow 4s ease-in-out infinite;
+}
+
+@keyframes variant-max-box-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 4px 16px -4px rgb(0 0 0 / 0.12),
+      0 0 0 1px color-mix(in srgb, var(--primary, #6796f5) 28%, transparent),
+      0 0 16px color-mix(in srgb, var(--primary, #6796f5) 15%, transparent),
+      0 0 44px color-mix(in srgb, var(--primary, #6796f5) 8%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 4px 16px -4px rgb(0 0 0 / 0.12),
+      0 0 0 1px color-mix(in srgb, var(--primary, #6796f5) 42%, transparent),
+      0 0 26px color-mix(in srgb, var(--primary, #6796f5) 24%, transparent),
+      0 0 68px color-mix(in srgb, var(--primary, #6796f5) 13%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .oc-composer-box:has([data-max-variant="true"]) {
+    animation: none;
+    box-shadow:
+      0 4px 16px -4px rgb(0 0 0 / 0.12),
+      0 0 0 1px color-mix(in srgb, var(--primary, #6796f5) 30%, transparent),
+      0 0 18px color-mix(in srgb, var(--primary, #6796f5) 16%, transparent);
+  }
+}

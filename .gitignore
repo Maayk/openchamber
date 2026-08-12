@@ -70,3 +70,6 @@ workspaces/
 .worktrees/
 test-results/
 artifacts/
+
+# Local runtime state (desktop db)
+.freebuff/
