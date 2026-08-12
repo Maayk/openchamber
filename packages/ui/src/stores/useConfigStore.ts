@@ -2485,16 +2485,20 @@ export const useConfigStore = create<ConfigStore>()(
                             const variants = model?.variants;
                             if (!variants) return undefined;
 
+                            const selectionStore = useSelectionStore.getState();
+                            // The saved variant follows the model, not the agent: fall
+                            // back to any agent's variant for this model so switching
+                            // build ↔ plan keeps the thinking mode (issue #2531).
                             const savedVariant = currentSessionId
-                                ? useSelectionStore.getState().getAgentModelVariantForSession(
-                                    currentSessionId,
-                                    agentName,
-                                    providerId,
-                                    modelId,
-                                )
+                                ? (selectionStore.getAgentModelVariantForSession(currentSessionId, agentName, providerId, modelId)
+                                    ?? selectionStore.getModelVariantForSession(currentSessionId, providerId, modelId))
+                                : undefined;
+                            const lastUsedVariant = selectionStore.lastUsedProvider?.providerID === providerId
+                                && selectionStore.lastUsedProvider?.modelID === modelId
+                                ? selectionStore.lastUsedProvider?.variant
                                 : undefined;
 
-                            for (const candidate of [savedVariant, agentVariant, settingsDefaultVariant]) {
+                            for (const candidate of [savedVariant, agentVariant, lastUsedVariant, settingsDefaultVariant]) {
                                 if (candidate && Object.prototype.hasOwnProperty.call(variants, candidate)) {
                                     return candidate;
                                 }
@@ -2505,11 +2509,9 @@ export const useConfigStore = create<ConfigStore>()(
 
                         const agent = agents.find((candidate) => candidate.name === agentName);
 
-                        // Prefer a session-level manual override for this agent over the
-                        // agent's configured default. Re-applying setAgent after subtask
-                        // completion / rematerialization must not clobber the override
-                        // (issue #2404). Explicit agent-picker switches still force the
-                        // agent default via ModelControls' shouldPreferAgentModel path.
+                        // 1. Per-agent manual override for this agent wins. Re-applying
+                        // setAgent after subtask completion / rematerialization must not
+                        // clobber the override (issue #2404).
                         if (currentSessionId) {
                             const existingAgentModel = useSelectionStore.getState().getAgentModelForSession(currentSessionId, agentName);
                             if (existingAgentModel && hasProviderModel(providers, existingAgentModel.providerId, existingAgentModel.modelId)) {
@@ -2525,7 +2527,24 @@ export const useConfigStore = create<ConfigStore>()(
                             }
                         }
 
-                        // No session override — use the agent's configured/pinned model.
+                        // 2. The session's active model persists across agent switches:
+                        // once a session has a model, switching agents (e.g. build ↔
+                        // plan) must keep it instead of resetting to the target agent's
+                        // pinned/default model (issue #2531). Agent defaults only seed
+                        // sessions that have no model selection yet.
+                        if (currentSessionId) {
+                            const sessionModel = useSelectionStore.getState().getSessionModelSelection(currentSessionId);
+                            if (sessionModel && hasProviderModel(providers, sessionModel.providerId, sessionModel.modelId)) {
+                                applyResolvedModelSelection(
+                                    sessionModel.providerId,
+                                    sessionModel.modelId,
+                                    resolveVariantForModel(sessionModel.providerId, sessionModel.modelId, agent?.variant),
+                                );
+                                return;
+                            }
+                        }
+
+                        // 3. No session selection — use the agent's configured/pinned model.
                         const agentModelSelection = agent?.model;
                         if (agentModelSelection?.providerID && agentModelSelection?.modelID) {
                             const { providerID, modelID } = agentModelSelection;
@@ -2538,7 +2557,8 @@ export const useConfigStore = create<ConfigStore>()(
                             }
                         }
 
-                        // If the agent has no preferred model, use settings default.
+                        // If the agent has no preferred model and the session has no
+                        // explicit override, use settings default.
                         if (settingsDefaultModel) {
                             const parsed = parseModelString(settingsDefaultModel);
                             if (parsed) {
@@ -2594,6 +2614,25 @@ export const useConfigStore = create<ConfigStore>()(
                         return;
                     }
 
+                    // A fresh conversation inherits the model + thinking variant the
+                    // user last used, instead of resetting to project/settings
+                    // defaults. The agent still resolves from the default cascade
+                    // (settings.defaultAgent → build → first primary).
+                    const lastUsed = useSelectionStore.getState().lastUsedProvider;
+                    const appliedLastUsed = Boolean(
+                        lastUsed?.providerID
+                        && lastUsed?.modelID
+                        && hasProviderModel(providers, lastUsed.providerID, lastUsed.modelID)
+                    );
+                    const effectiveProviderId = appliedLastUsed ? lastUsed!.providerID : resolvedProviderId;
+                    const effectiveModelId = appliedLastUsed ? lastUsed!.modelID : resolvedModelId;
+                    const effectiveVariant = appliedLastUsed
+                        ? (lastUsed!.variant && hasValidVariant(providers, lastUsed!.providerID, lastUsed!.modelID, lastUsed!.variant)
+                            ? lastUsed!.variant
+                            : undefined)
+                        : resolvedVariant;
+                    const effectiveSelectionSource: "auto" | "manual" = appliedLastUsed ? "manual" : "auto";
+
                     set((state) => {
                         const directoryKey = state.activeDirectoryKey;
                         const baseSnapshot: DirectoryScopedConfig = state.directoryScoped[directoryKey] ?? {
@@ -2611,31 +2650,31 @@ export const useConfigStore = create<ConfigStore>()(
                         const nextSnapshot: DirectoryScopedConfig = {
                             ...baseSnapshot,
                             currentAgentName: resolvedAgentName,
-                            ...(resolvedProviderId && resolvedModelId
+                            ...(effectiveProviderId && effectiveModelId
                                 ? {
-                                    currentProviderId: resolvedProviderId,
-                                    currentModelId: resolvedModelId,
-                                    currentVariant: resolvedVariant,
-                                    selectedProviderId: preserveAddProviderSelection(state.selectedProviderId, resolvedProviderId),
+                                    currentProviderId: effectiveProviderId,
+                                    currentModelId: effectiveModelId,
+                                    currentVariant: effectiveVariant,
+                                    selectedProviderId: preserveAddProviderSelection(state.selectedProviderId, effectiveProviderId),
                                 }
                                 : {}),
-                            selectionSource: "auto",
+                            selectionSource: effectiveSelectionSource,
                         };
 
                         const nextState: Partial<ConfigStore> = {
                             currentAgentName: resolvedAgentName,
-                            selectionSource: "auto",
+                            selectionSource: effectiveSelectionSource,
                             directoryScoped: {
                                 ...state.directoryScoped,
                                 [directoryKey]: nextSnapshot,
                             },
                         };
 
-                        if (resolvedProviderId && resolvedModelId) {
-                            nextState.currentProviderId = resolvedProviderId;
-                            nextState.currentModelId = resolvedModelId;
-                            nextState.currentVariant = resolvedVariant;
-                            nextState.selectedProviderId = preserveAddProviderSelection(state.selectedProviderId, resolvedProviderId);
+                        if (effectiveProviderId && effectiveModelId) {
+                            nextState.currentProviderId = effectiveProviderId;
+                            nextState.currentModelId = effectiveModelId;
+                            nextState.currentVariant = effectiveVariant;
+                            nextState.selectedProviderId = preserveAddProviderSelection(state.selectedProviderId, effectiveProviderId);
                         }
 
                         return nextState;

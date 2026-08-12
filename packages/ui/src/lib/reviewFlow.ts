@@ -340,7 +340,8 @@ const resolveModelContext = (sessionID: string): SessionModelContext | null => {
   }
   // Variants are model-specific; only reuse one resolved for the same model.
   const selectionVariant = agent
-    ? selection.getAgentModelVariantForSession(sessionID, agent, selectedModel.providerId, selectedModel.modelId)
+    ? (selection.getAgentModelVariantForSession(sessionID, agent, selectedModel.providerId, selectedModel.modelId)
+      ?? selection.getModelVariantForSession(sessionID, selectedModel.providerId, selectedModel.modelId))
     : undefined;
   const configVariant = config.currentProviderId === selectedModel.providerId && config.currentModelId === selectedModel.modelId
     ? config.currentVariant

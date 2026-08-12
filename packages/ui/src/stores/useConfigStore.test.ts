@@ -257,6 +257,7 @@ describe('useConfigStore provider persistence', () => {
       sessionModelSelections: new Map(),
       sessionAgentSelections: new Map(),
       sessionAgentModelSelections: new Map(),
+      sessionAgentModelVariants: new Map(),
       lastUsedProvider: null,
     });
     useSessionUIStore.setState({ currentSessionId: null });
@@ -587,6 +588,251 @@ describe('useConfigStore provider persistence', () => {
     const state = useConfigStore.getState();
     expect(state.currentProviderId).toBe('provider');
     expect(state.currentModelId).toBe('model-a');
+  });
+
+  test('[issue-2531] setAgent keeps the session model when the target agent has no pinned model', () => {
+    // Reproduces the reported bug: default model is model-a, the user picks
+    // model-b for the session, then switches from build to plan. The plan agent
+    // has neither a pinned model nor a per-agent saved model, so the previous
+    // behavior fell back to the settings default and reset the selection.
+    const sessionId = 'ses_2531_keep_session_model';
+    const multiModelProvider = {
+      ...provider('provider', 'model-a'),
+      models: [
+        provider('provider', 'model-a').models[0],
+        provider('provider', 'model-b').models[0],
+      ],
+    };
+    useSessionUIStore.setState({ currentSessionId: sessionId });
+    useSelectionStore.getState().saveSessionModelSelection(sessionId, 'provider', 'model-b');
+    useConfigStore.setState({
+      activeDirectoryKey: DIRECTORY,
+      providers: [multiModelProvider],
+      agents: [testAgent('plan')],
+      settingsDefaultModel: 'provider/model-a',
+      currentProviderId: 'provider',
+      currentModelId: 'model-a',
+      currentAgentName: 'build',
+      selectionSource: 'manual',
+      currentVariant: undefined,
+      directoryScoped: {},
+    });
+
+    useConfigStore.getState().setAgent('plan');
+
+    const state = useConfigStore.getState();
+    expect(state.currentAgentName).toBe('plan');
+    expect(state.currentProviderId).toBe('provider');
+    expect(state.currentModelId).toBe('model-b');
+  });
+
+  test('[issue-2531] session model wins over the agent pinned model on agent switch', () => {
+    // The plan agent pins model-a, but the user is using model-b in this
+    // session. Switching build → plan must keep model-b instead of resetting
+    // to the target agent's pinned model.
+    const sessionId = 'ses_2531_session_wins_over_pin';
+    const multiModelProvider = {
+      ...provider('provider', 'model-a'),
+      models: [
+        provider('provider', 'model-a').models[0],
+        provider('provider', 'model-b').models[0],
+      ],
+    };
+    useSessionUIStore.setState({ currentSessionId: sessionId });
+    useSelectionStore.getState().saveSessionModelSelection(sessionId, 'provider', 'model-b');
+    useConfigStore.setState({
+      activeDirectoryKey: DIRECTORY,
+      providers: [multiModelProvider],
+      agents: [testAgent('plan', { model: { providerID: 'provider', modelID: 'model-a' } })],
+      settingsDefaultModel: 'provider/model-a',
+      currentProviderId: 'provider',
+      currentModelId: 'model-b',
+      currentAgentName: 'build',
+      selectionSource: 'manual',
+      currentVariant: undefined,
+      directoryScoped: {},
+    });
+
+    useConfigStore.getState().setAgent('plan');
+
+    const state = useConfigStore.getState();
+    expect(state.currentAgentName).toBe('plan');
+    expect(state.currentProviderId).toBe('provider');
+    expect(state.currentModelId).toBe('model-b');
+  });
+
+  test('[issue-2531] setAgent keeps the session variant when switching agents', () => {
+    // The user picked gpt-5.5 with thinking "max" while on the build agent.
+    // Switching to plan (same model) must keep the thinking variant: the saved
+    // variant follows the model, not the agent.
+    const sessionId = 'ses_2531_variant_across_agents';
+    useSessionUIStore.setState({ currentSessionId: sessionId });
+    useSelectionStore.getState().saveSessionModelSelection(sessionId, 'openai', 'gpt-5.5');
+    useSelectionStore.getState().saveAgentModelForSession(sessionId, 'build', 'openai', 'gpt-5.5');
+    useSelectionStore.getState().saveAgentModelVariantForSession(sessionId, 'build', 'openai', 'gpt-5.5', 'max');
+    useConfigStore.setState({
+      activeDirectoryKey: DIRECTORY,
+      providers: [provider('openai', 'gpt-5.5', { low: {}, high: {}, max: {} })],
+      agents: [testAgent('build'), testAgent('plan')],
+      currentProviderId: 'openai',
+      currentModelId: 'gpt-5.5',
+      currentVariant: 'max',
+      currentAgentName: 'build',
+      selectionSource: 'manual',
+      directoryScoped: {},
+    });
+
+    useConfigStore.getState().setAgent('plan');
+
+    const state = useConfigStore.getState();
+    expect(state.currentAgentName).toBe('plan');
+    expect(state.currentModelId).toBe('gpt-5.5');
+    expect(state.currentVariant).toBe('max');
+  });
+
+  test('applyDefaultModelAgentSelection seeds a new conversation with the last used model and variant', () => {
+    useSelectionStore.setState({ lastUsedProvider: { providerID: 'openai', modelID: 'gpt-5.5', variant: 'max' } });
+    useConfigStore.setState({
+      activeDirectoryKey: DIRECTORY,
+      providers: [provider('openai', 'gpt-5.5', { max: {} }), provider('anthropic', 'claude')],
+      agents: [testAgent('build'), testAgent('plan')],
+      settingsDefaultModel: 'anthropic/claude',
+      settingsDefaultVariant: undefined,
+      currentProviderId: '',
+      currentModelId: '',
+      currentVariant: undefined,
+      currentAgentName: undefined,
+      selectionSource: 'auto',
+      directoryScoped: {},
+    });
+
+    useConfigStore.getState().applyDefaultModelAgentSelection();
+
+    const state = useConfigStore.getState();
+    expect(state.currentAgentName).toBe('build');
+    expect(state.currentProviderId).toBe('openai');
+    expect(state.currentModelId).toBe('gpt-5.5');
+    expect(state.currentVariant).toBe('max');
+    expect(state.selectionSource).toBe('manual');
+  });
+
+  test('applyDefaultModelAgentSelection falls back to defaults when the last used model is unavailable', () => {
+    useSelectionStore.setState({ lastUsedProvider: { providerID: 'gone', modelID: 'gone-model', variant: 'max' } });
+    useConfigStore.setState({
+      activeDirectoryKey: DIRECTORY,
+      providers: [provider('anthropic', 'claude')],
+      agents: [testAgent('build')],
+      settingsDefaultModel: 'anthropic/claude',
+      settingsDefaultVariant: undefined,
+      currentProviderId: '',
+      currentModelId: '',
+      currentVariant: undefined,
+      currentAgentName: undefined,
+      selectionSource: 'auto',
+      directoryScoped: {},
+    });
+
+    useConfigStore.getState().applyDefaultModelAgentSelection();
+
+    const state = useConfigStore.getState();
+    expect(state.currentProviderId).toBe('anthropic');
+    expect(state.currentModelId).toBe('claude');
+    expect(state.selectionSource).toBe('auto');
+  });
+
+  test('setAgent applies the settings default when the session has no saved model and the agent has no pin', () => {
+    const sessionId = 'ses_2531_settings_default';
+    const multiModelProvider = {
+      ...provider('provider', 'model-a'),
+      models: [
+        provider('provider', 'model-a').models[0],
+        provider('provider', 'model-b').models[0],
+      ],
+    };
+    useSessionUIStore.setState({ currentSessionId: sessionId });
+    useConfigStore.setState({
+      activeDirectoryKey: DIRECTORY,
+      providers: [multiModelProvider],
+      agents: [testAgent('plan')],
+      settingsDefaultModel: 'provider/model-a',
+      currentProviderId: 'provider',
+      currentModelId: 'model-b',
+      currentAgentName: 'build',
+      selectionSource: 'manual',
+      currentVariant: undefined,
+      directoryScoped: {},
+    });
+
+    useConfigStore.getState().setAgent('plan');
+
+    const state = useConfigStore.getState();
+    expect(state.currentAgentName).toBe('plan');
+    expect(state.currentModelId).toBe('model-a');
+  });
+
+  describe('selection-store variant persistence', () => {
+    test('getModelVariantForSession falls back across agents', () => {
+      const sessionId = 'ses_variant_cross_agent';
+      useSelectionStore.getState().saveAgentModelVariantForSession(sessionId, 'build', 'openai', 'gpt-5.5', 'max');
+      expect(useSelectionStore.getState().getAgentModelVariantForSession(sessionId, 'plan', 'openai', 'gpt-5.5')).toBe(undefined);
+      expect(useSelectionStore.getState().getModelVariantForSession(sessionId, 'openai', 'gpt-5.5')).toBe('max');
+      expect(useSelectionStore.getState().getModelVariantForSession('ses_other', 'openai', 'gpt-5.5')).toBe(undefined);
+    });
+
+    test('lastUsedProvider tracks the last used variant', () => {
+      useSelectionStore.getState().saveAgentModelVariantForSession('s1', 'build', 'openai', 'gpt-5.5', 'max');
+      expect(useSelectionStore.getState().lastUsedProvider).toEqual({ providerID: 'openai', modelID: 'gpt-5.5', variant: 'max' });
+
+      // Re-selecting the same model keeps the variant.
+      useSelectionStore.getState().saveSessionModelSelection('s1', 'openai', 'gpt-5.5');
+      expect(useSelectionStore.getState().lastUsedProvider?.variant).toBe('max');
+
+      // Switching to another model clears the variant until one is committed.
+      useSelectionStore.getState().saveSessionModelSelection('s1', 'openai', 'other');
+      expect(useSelectionStore.getState().lastUsedProvider).toEqual({ providerID: 'openai', modelID: 'other', variant: undefined });
+
+      // Clearing a variant resets lastUsedProvider.variant.
+      useSelectionStore.getState().saveAgentModelVariantForSession('s1', 'build', 'openai', 'other', 'low');
+      useSelectionStore.getState().saveAgentModelVariantForSession('s1', 'build', 'openai', 'other', undefined);
+      expect(useSelectionStore.getState().lastUsedProvider).toEqual({ providerID: 'openai', modelID: 'other', variant: undefined });
+    });
+
+    test('saved agent variant survives a persist round-trip', async () => {
+      const sessionId = 'ses_variant_roundtrip';
+      useSelectionStore.getState().saveAgentModelVariantForSession(sessionId, 'build', 'provider', 'model', 'max');
+      expect(useSelectionStore.getState().getAgentModelVariantForSession(sessionId, 'build', 'provider', 'model')).toBe('max');
+
+      const raw = storage.get('selection-store');
+      expect(raw).not.toBeNull();
+      const persisted = JSON.parse(raw!);
+      expect(persisted.state.sessionAgentModelVariants).toEqual([
+        [sessionId, [['build', [['provider/model', 'max']]]]],
+      ]);
+
+      // Simulate a fresh start: seed storage with a payload for a session that
+      // is not in memory yet, then rehydrate. (setState would overwrite the
+      // payload via the persist middleware, so seed storage directly.)
+      const restartSessionId = 'ses_variant_restart';
+      storage.set('selection-store', JSON.stringify({
+        state: {
+          ...persisted.state,
+          sessionAgentModelVariants: [[restartSessionId, [['plan', [['provider/model', 'max']]]]]],
+        },
+        version: persisted.version,
+      }));
+      expect(useSelectionStore.getState().getAgentModelVariantForSession(restartSessionId, 'plan', 'provider', 'model')).toBe(undefined);
+      await useSelectionStore.persist.rehydrate();
+      expect(useSelectionStore.getState().getAgentModelVariantForSession(restartSessionId, 'plan', 'provider', 'model')).toBe('max');
+    });
+
+    test('clearing a variant removes it from persisted state', () => {
+      const sessionId = 'ses_variant_clear';
+      useSelectionStore.getState().saveAgentModelVariantForSession(sessionId, 'build', 'provider', 'model', 'max');
+      useSelectionStore.getState().saveAgentModelVariantForSession(sessionId, 'build', 'provider', 'model', undefined);
+      expect(useSelectionStore.getState().getAgentModelVariantForSession(sessionId, 'build', 'provider', 'model')).toBe(undefined);
+      const persisted = JSON.parse(storage.get('selection-store')!);
+      expect(persisted.state.sessionAgentModelVariants).toEqual([]);
+    });
   });
 
   test('loadAgents does not fetch OpenCode config directly', async () => {

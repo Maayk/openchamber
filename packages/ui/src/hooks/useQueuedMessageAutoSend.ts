@@ -151,6 +151,7 @@ const resolveSessionSendConfig = (sessionId: string) => {
   const variant =
     selectedAgent && providerID && modelID
       ? (selection.getAgentModelVariantForSession(sessionId, selectedAgent, providerID, modelID)
+        ?? selection.getModelVariantForSession(sessionId, providerID, modelID)
         ?? context.getAgentModelVariantForSession(sessionId, selectedAgent, providerID, modelID))
       : undefined;
 

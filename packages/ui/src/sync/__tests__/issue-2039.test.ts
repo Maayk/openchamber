@@ -170,6 +170,7 @@ mock.module("../selection-store", () => ({
       getSessionModelSelection: () => null,
       getAgentModelForSession: () => null,
       getAgentModelVariantForSession: () => undefined,
+      getModelVariantForSession: () => undefined,
     }),
   },
 }))

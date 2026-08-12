@@ -344,6 +344,8 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     const getAgentModelForSession = useSelectionStore((state) => state.getAgentModelForSession);
     const saveAgentModelVariantForSession = useSelectionStore((state) => state.saveAgentModelVariantForSession);
     const getAgentModelVariantForSession = useSelectionStore((state) => state.getAgentModelVariantForSession);
+    const getModelVariantForSession = useSelectionStore((state) => state.getModelVariantForSession);
+    const lastUsedProvider = useSelectionStore((state) => state.lastUsedProvider);
 
     const contextHydrated = useContextStore((state) => state.hasHydrated);
 
@@ -641,7 +643,6 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     ];
 
     const prevAgentNameRef = React.useRef<string | undefined>(undefined);
-    const explicitAgentSwitchRef = React.useRef<string | null>(null);
     const latestLoadedUserChoiceRestoreRef = React.useRef<string | null>(null);
 
     const currentSessionDirectory = currentSessionId ? getDirectoryForSession(currentSessionId) : undefined;
@@ -712,7 +713,11 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
 
         const effectiveAgentName = uiAgentName || currentAgentName;
         if (currentSessionId && effectiveAgentName) {
-            const savedVariant = getAgentModelVariantForSession(currentSessionId, effectiveAgentName, providerId, modelId);
+            // The variant follows the model, not the agent: fall back to any
+            // agent's variant for this model so build ↔ plan keeps the thinking
+            // mode (issue #2531).
+            const savedVariant = getAgentModelVariantForSession(currentSessionId, effectiveAgentName, providerId, modelId)
+                ?? getModelVariantForSession(currentSessionId, providerId, modelId);
             if (savedVariant && variantOptions.includes(savedVariant)) {
                 return savedVariant;
             }
@@ -720,6 +725,13 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
 
         if (currentProviderId === providerId && currentModelId === modelId && currentVariant && variantOptions.includes(currentVariant)) {
             return currentVariant;
+        }
+
+        const lastUsedVariant = lastUsedProvider?.providerID === providerId && lastUsedProvider?.modelID === modelId
+            ? lastUsedProvider?.variant
+            : undefined;
+        if (lastUsedVariant && variantOptions.includes(lastUsedVariant)) {
+            return lastUsedVariant;
         }
 
         if (!currentSessionId && settingsDefaultVariant && variantOptions.includes(settingsDefaultVariant)) {
@@ -734,7 +746,9 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         currentSessionId,
         currentVariant,
         getAgentModelVariantForSession,
+        getModelVariantForSession,
         getModelVariantOptions,
+        lastUsedProvider,
         settingsDefaultVariant,
         uiAgentName,
     ]);
@@ -887,6 +901,45 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             return;
         }
 
+        // Resolves the variant to apply when a saved model selection is restored.
+        // Reads the store directly (not the effect closure) so the resolution
+        // reflects the selection that `tryApplyModelSelection` just committed.
+        const resolveSavedVariantForAgent = (
+            providerId: string,
+            modelId: string,
+            agentName: string | null | undefined,
+        ): string | undefined => {
+            const variantOptions = getModelVariantOptions(providerId, modelId);
+            if (variantOptions.length === 0) {
+                return undefined;
+            }
+            if (currentSessionId && agentName) {
+                const savedVariant = useSelectionStore.getState().getAgentModelVariantForSession(
+                    currentSessionId,
+                    agentName,
+                    providerId,
+                    modelId,
+                )
+                    ?? useSelectionStore.getState().getModelVariantForSession(currentSessionId, providerId, modelId);
+                if (savedVariant && variantOptions.includes(savedVariant)) {
+                    return savedVariant;
+                }
+            }
+            const live = useConfigStore.getState();
+            if (
+                live.currentProviderId === providerId
+                && live.currentModelId === modelId
+                && live.currentVariant
+                && variantOptions.includes(live.currentVariant)
+            ) {
+                return live.currentVariant;
+            }
+            if (live.settingsDefaultVariant && variantOptions.includes(live.settingsDefaultVariant)) {
+                return live.settingsDefaultVariant;
+            }
+            return undefined;
+        };
+
         const applySavedSelections = (): 'resolved' | 'waiting' | 'continue' => {
             const savedSessionModel = getSessionModelSelection(currentSessionId);
             const savedAgentName = currentSessionId
@@ -901,6 +954,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                 if (savedModel) {
                     const result = tryApplyModelSelection(savedModel.providerId, savedModel.modelId, savedAgentName);
                     if (result === 'applied') {
+                        setCurrentVariant(resolveSavedVariantForAgent(savedModel.providerId, savedModel.modelId, savedAgentName));
                         return 'resolved';
                     }
                     if (result === 'provider-missing') {
@@ -912,6 +966,11 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             if (savedSessionModel) {
                 const result = tryApplyModelSelection(savedSessionModel.providerId, savedSessionModel.modelId, savedAgentName || currentAgentName || undefined);
                 if (result === 'applied') {
+                    setCurrentVariant(resolveSavedVariantForAgent(
+                        savedSessionModel.providerId,
+                        savedSessionModel.modelId,
+                        savedAgentName || currentAgentName || undefined,
+                    ));
                     return 'resolved';
                 }
                 if (result === 'provider-missing') {
@@ -1012,7 +1071,9 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         currentAgentName,
         getSessionModelSelection,
         getAgentModelForSession,
+        getModelVariantOptions,
         setAgent,
+        setCurrentVariant,
         tryApplyModelSelection,
         saveSessionAgentSelection,
         contextHydrated,
@@ -1032,9 +1093,6 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                     prevAgentNameRef.current = currentAgentName;
 
                     if (currentAgentName && currentSessionId) {
-                        const shouldPreferAgentModel = explicitAgentSwitchRef.current === currentAgentName;
-                        explicitAgentSwitchRef.current = null;
-
                         await new Promise<void>((resolve) => {
                             const timer = setTimeout(resolve, 50);
                             abortController.signal.addEventListener('abort', () => {
@@ -1047,33 +1105,10 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                             return;
                         }
 
-                        const selectedAgent = shouldPreferAgentModel
-                            ? agents.find((agent) => agent.name === currentAgentName)
-                            : undefined;
-                        if (selectedAgent?.model?.providerID && selectedAgent.model.modelID) {
-                            const result = tryApplyModelSelection(
-                                selectedAgent.model.providerID,
-                                selectedAgent.model.modelID,
-                                currentAgentName,
-                            );
-                            if (result === 'applied' || result === 'provider-missing') {
-                                if (result === 'applied') {
-                                    saveSessionModelSelection(
-                                        currentSessionId,
-                                        selectedAgent.model.providerID,
-                                        selectedAgent.model.modelID,
-                                    );
-                                    saveAgentModelForSession(
-                                        currentSessionId,
-                                        currentAgentName,
-                                        selectedAgent.model.providerID,
-                                        selectedAgent.model.modelID,
-                                    );
-                                }
-                                return;
-                            }
-                        }
-
+                        // setAgent already applies the correct priority (per-agent
+                        // override → session model → agent pinned → settings default),
+                        // so an explicit agent-picker switch must not clobber the
+                        // session's model/variant with the agent default (issue #2531).
                         const persistedChoice = getAgentModelForSession(currentSessionId, currentAgentName);
 
                         if (persistedChoice) {
@@ -1099,12 +1134,9 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             abortController.abort();
         };
     }, [
-        agents,
         currentAgentName,
         currentSessionId,
         getAgentModelForSession,
-        saveAgentModelForSession,
-        saveSessionModelSelection,
         tryApplyModelSelection,
         contextHydrated,
     ]);
@@ -1133,24 +1165,37 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             return;
         }
 
-        // Draft state (no session yet): seed from settings default, but don't override
-        // user selection while drafting.
+        const lastUsedVariant = lastUsedProvider?.providerID === currentProviderId && lastUsedProvider?.modelID === currentModelId
+            ? lastUsedProvider?.variant
+            : undefined;
+        const validatedLastUsedVariant = lastUsedVariant && availableVariants.includes(lastUsedVariant)
+            ? lastUsedVariant
+            : undefined;
+
+        // Draft state (no session yet): seed from the last used thinking variant,
+        // then settings default, but don't override user selection while drafting.
         if (!currentSessionId) {
             if (!currentVariant && !manualVariantSelectionRef.current) {
-                const desired = settingsDefaultVariant && availableVariants.includes(settingsDefaultVariant)
-                    ? settingsDefaultVariant
-                    : undefined;
+                const desired = validatedLastUsedVariant
+                    ?? (settingsDefaultVariant && availableVariants.includes(settingsDefaultVariant)
+                        ? settingsDefaultVariant
+                        : undefined);
                 setCurrentVariant(desired);
             }
             return;
         }
 
+        // The variant follows the model, not the agent: fall back to any agent's
+        // variant for this model, then the last used variant, before settings
+        // default (issue #2531).
         const savedVariant = getAgentModelVariantForSession(
             currentSessionId,
             currentAgentName,
             currentProviderId,
             currentModelId,
-        );
+        )
+            ?? getModelVariantForSession(currentSessionId, currentProviderId, currentModelId)
+            ?? validatedLastUsedVariant;
 
         const resolvedSaved = savedVariant && availableVariants.includes(savedVariant)
             ? savedVariant
@@ -1169,6 +1214,8 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         currentModelId,
         currentVariant,
         getAgentModelVariantForSession,
+        getModelVariantForSession,
+        lastUsedProvider,
         setCurrentVariant,
         settingsDefaultVariant,
     ]);
@@ -1185,7 +1232,6 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
 
     const handleAgentChange = React.useCallback((agentName: string, options?: { closeModelSelector?: boolean }) => {
         try {
-            explicitAgentSwitchRef.current = agentName;
             setAgent(agentName);
             addRecentAgent(agentName);
             if (options?.closeModelSelector ?? true) {

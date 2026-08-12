@@ -573,7 +573,8 @@ const resolveSessionGenerationContext = (): SessionGenerationContext | null => {
   }
 
   const selectionVariant = agent
-    ? selection.getAgentModelVariantForSession(sessionId, agent, selectedModel.providerId, selectedModel.modelId)
+    ? (selection.getAgentModelVariantForSession(sessionId, agent, selectedModel.providerId, selectedModel.modelId)
+      ?? selection.getModelVariantForSession(sessionId, selectedModel.providerId, selectedModel.modelId))
     : undefined;
   const lastChoiceVariant = lastChoiceModel
     && lastChoiceModel.providerId === selectedModel.providerId
